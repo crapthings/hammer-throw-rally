@@ -1,0 +1,9 @@
+node_modules/
+dist/
+._*
+.DS_Store
+.env
+.env.*
+src/assets/charge-spin.mp3
+src/assets/river-grass.png
+src/assets/spring-river.png
