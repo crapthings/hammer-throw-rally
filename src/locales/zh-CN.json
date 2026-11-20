@@ -62,5 +62,16 @@
   "bird": "击中飞鸟！",
   "pit": "踩到土坑了！",
   "goldenCharge": "金色气焰",
-  "thunderCharge": "雷霆蓄力"
+  "thunderCharge": "雷霆蓄力",
+  "releaseNow": "现在松手！",
+  "releaseTiming": "等提示音",
+  "sweetThrow": "甜点出手！",
+  "kickNow": "现在踢腿",
+  "kickWait": "等链条绷紧",
+  "kickUsed": "踢腿助飞！",
+  "timingHelp": "听到提示音时松手可提高出手速度。蓄力低于 150% 时，还能降低被带飞的概率。",
+  "routeHelp": "低抛可以收集坑前的少量金币。高抛能吃到更长的金币弧线和火箭，但要避开飞鸟。",
+  "kickHelp": "被铅球带到空中后，在链条绷紧时按空格，可踢腿向上助飞一次。",
+  "trampoline": "蹦床助跳！",
+  "trampolineHelp": "铅球落在跑道蹦床上会再次弹起。"
 }

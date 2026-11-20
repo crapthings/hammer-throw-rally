@@ -81,8 +81,9 @@ function App() {
       gameAudio.current?.updateSpin(frame.phase === 'charging', frame.spinRate)
       gameAudio.current?.updateFootsteps(frame.phase === 'running', frame.runTime)
       frame.sounds.forEach((sound) => gameAudio.current?.playEventSound(sound))
-      scene.current.draw(frame)
+      const tetherTaut = scene.current.draw(frame)
       gameAudio.current?.updateCarriedScream(frame.phase === 'flying' && frame.dragged, frame.launchTime, scene.current.isPlayerAirborne())
+      return tetherTaut
     }, () => gameAudio.current?.playCoin(), () => gameAudio.current?.playThrow(), (speed) => gameAudio.current?.playBirdImpact(speed))
     game.current.setFlightDebug(flightDebug)
     setPanel(null)
@@ -148,7 +149,7 @@ function App() {
               <p>{flightDebug === 'normal' ? t('hideDebug') : t('forceDebug')}</p>
             </aside>
           )}
-          {(charging || notice) && (
+          {(charging || notice || (status.kickAvailable && !status.slowMotion)) && (
             <div className="console compact-console">
               {charging && (
                 <div className="meter" data-stage={stage}>
@@ -169,9 +170,11 @@ function App() {
                       <span key={end} style={{ left: end * 100 / MAX_CHARGE + '%' }}>{end}%</span>
                     ))}
                   </div>
+                  {status.power >= 0.72 && <div className="timing-hint" data-active={status.sweet}>{t(status.sweet ? 'releaseNow' : 'releaseTiming')}</div>}
                   <div className="meter-aim">{status.angle}° <span>·</span> {t('landing', { distance: Math.abs(status.landing - status.position).toFixed(1) })}</div>
                 </div>
               )}
+              {status.kickAvailable && !status.slowMotion && <div className="timing-hint" data-active={status.tetherTaut}><kbd>{t('space')}</kbd> {t(status.tetherTaut ? 'kickNow' : 'kickWait')}</div>}
               {notice && <p className="message" role="status">{notice}</p>}
             </div>
           )}
@@ -231,6 +234,10 @@ function App() {
                   <li>{t('controlsHelp')}</li>
                   <li>{t('overloadHelp')}</li>
                   <li>{t('carryHelp')}</li>
+                  <li>{t('timingHelp')}</li>
+                  <li>{t('routeHelp')}</li>
+                  <li>{t('trampolineHelp')}</li>
+                  <li>{t('kickHelp')}</li>
                   <li>{t('courseHelp')}</li>
                 </ul>
               )}

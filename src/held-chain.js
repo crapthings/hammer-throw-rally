@@ -1,5 +1,9 @@
 import { COURSE } from './course.js'
 
+const STEP = 1 / 180
+const DAMPING = Math.exp(-11.14 * STEP)
+const STEP_TOLERANCE = 1e-9
+
 export function createHeldChain(hand, ball, count) {
   const spacing = COURSE.chainLength / count
   const nodes = Array.from({ length: count + 1 }, (_, i) => {
@@ -10,21 +14,32 @@ export function createHeldChain(hand, ball, count) {
     return { x, y, z, px: x, py: y, pz: z }
   })
 
+  let remainder = 0
+  let previousHand = { ...hand }
+  let previousYaw
+
   return {
     nodes,
     advance(hand, yaw, direction, spinRate, dt, restingBall) {
-      const count = Math.max(1, Math.ceil(dt * 180))
-      const step = dt / count
-      for (let substep = 0; substep < count; substep++) {
-        Object.assign(nodes[0], hand)
+      if (dt <= 0) return
+      previousYaw ??= yaw
+      for (let elapsed = STEP - remainder; elapsed <= dt + STEP_TOLERANCE; elapsed += STEP) {
+        const blend = Math.min(1, elapsed / dt)
+        const anchor = nodes[0]
+        anchor.x = previousHand.x + (hand.x - previousHand.x) * blend
+        anchor.y = previousHand.y + (hand.y - previousHand.y) * blend
+        anchor.z = previousHand.z + (hand.z - previousHand.z) * blend
+        const angle = previousYaw + (yaw - previousYaw) * blend
+        const pull = Math.min(450, spinRate ** 2 * COURSE.chainLength) * STEP ** 2 / (nodes.length - 1)
+        const pullX = direction * Math.cos(angle) * pull
+        const pullZ = -direction * Math.sin(angle) * pull
         for (let i = 1; i < nodes.length; i++) {
           if (restingBall && i === nodes.length - 1) continue
           const node = nodes[i]
           const { x, y, z } = node
-          const pull = Math.min(450, spinRate ** 2 * COURSE.chainLength) * i / (nodes.length - 1)
-          node.x += (x - node.px) * 0.94 + direction * Math.cos(yaw) * pull * step ** 2
-          node.y += (y - node.py) * 0.94 - 37 * step ** 2
-          node.z += (z - node.pz) * 0.94 - direction * Math.sin(yaw) * pull * step ** 2
+          node.x += (x - node.px) * DAMPING + pullX * i
+          node.y += (y - node.py) * DAMPING - 37 * STEP ** 2
+          node.z += (z - node.pz) * DAMPING + pullZ * i
           Object.assign(node, { px: x, py: y, pz: z })
         }
         for (let iteration = 0; iteration < 20; iteration++) {
@@ -48,6 +63,10 @@ export function createHeldChain(hand, ball, count) {
           }
         }
       }
+      const total = remainder + dt
+      remainder = Math.max(0, total - Math.floor((total + STEP_TOLERANCE) / STEP) * STEP)
+      previousHand = { ...hand }
+      previousYaw = yaw
     },
   }
 }

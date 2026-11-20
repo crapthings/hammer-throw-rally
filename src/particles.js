@@ -6,11 +6,12 @@ export function createParticles(stage) {
   const particles = []
   function burst(kind, x, y, speed = 6) {
     const blood = kind === 'bird'
+    const spring = kind === 'trampoline'
     const fire = kind === 'explosion' || kind === 'rocket'
     const count = fire ? 40 : blood ? 32 : Math.min(24, 6 + Math.round(speed))
     for (let i = 0; i < count; i++) {
       const feather = blood && i % 4 === 0
-      const color = fire ? [0xffd363, 0xe89147, 0xe45c43, 0x626575][i % 4] : blood ? (feather ? 0xf4f0e2 : [0xbb373b, 0xd94b45, 0x7f2837][i % 3]) : [0xd9c6a4, 0xebd7b5, 0xc4ad8a][i % 3]
+      const color = spring ? (i % 2 ? 0xffd369 : 0x6bc9bd) : fire ? [0xffd363, 0xe89147, 0xe45c43, 0x626575][i % 4] : blood ? (feather ? 0xf4f0e2 : [0xbb373b, 0xd94b45, 0x7f2837][i % 3]) : [0xd9c6a4, 0xebd7b5, 0xc4ad8a][i % 3]
       const graphic = new Graphics().rect(-0.5, -0.5, feather ? 2 : 1, 1).fill(color)
       layer.addChild(graphic)
       const angle = Math.random() * Math.PI * 2
@@ -54,6 +55,8 @@ export function createParticles(stage) {
   return {
     burst, clear, showScore, showHelp,
     draw(dt, center, cameraHeight, scale, width, height) {
+      const drag = Math.exp(-dt * 1.3)
+      const horizontalTravel = (1 - drag) / 1.3
       for (let i = particles.length - 1; i >= 0; i--) {
         const p = particles[i]
         p.age += dt
@@ -76,10 +79,10 @@ export function createParticles(stage) {
           p.graphic.alpha = Math.min(p.help ? p.age / 0.25 : 1, (p.life - p.age) / (p.help ? 0.4 : 0.25))
           continue
         }
+        p.x += p.vx * horizontalTravel
+        p.y += p.vy * dt + p.gravity * dt ** 2 / 2
         p.vy += p.gravity * dt
-        p.x += p.vx * dt
-        p.y += p.vy * dt
-        p.vx *= Math.exp(-dt * 1.3)
+        p.vx *= drag
         p.graphic.position.set(Math.round(width / 2 + (p.x - center) * scale), Math.round(height / 2 + (cameraHeight + p.y) * scale * 0.993))
         p.graphic.scale.set(p.size * scale * (p.dust ? 1 + p.age * 2 : 1))
         p.graphic.rotation += dt * (p.dust ? 0.3 : 7)

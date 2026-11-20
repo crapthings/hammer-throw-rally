@@ -169,10 +169,30 @@ export function createGameAudio() {
       lastBirdImpact = now
     },
     playEventSound({ kind, speed }) {
-      const buffer = eventBuffers[kind]
-      if (!buffer || context.state !== 'running' || !volume.gain.value) return
-      const strength = kind === 'bounce' ? Math.min(1, speed / 22) : 1
-      startVoicePlayback(buffer, false, 0.36 + 0.42 * strength, kind === 'bounce' ? 1.12 - strength * 0.16 : 1)
+      if (context.state !== 'running' || !volume.gain.value) return
+      if (kind === 'sweetCue' || kind === 'sweetThrow' || kind === 'kick') {
+        const oscillator = context.createOscillator()
+        const envelope = context.createGain()
+        const now = context.currentTime
+        const duration = kind === 'sweetCue' ? 0.075 : 0.14
+        oscillator.type = 'triangle'
+        oscillator.frequency.setValueAtTime(kind === 'kick' ? 420 : 1047, now)
+        oscillator.frequency.exponentialRampToValueAtTime(kind === 'kick' ? 700 : 1568, now + duration)
+        envelope.gain.setValueAtTime(0.001, now)
+        envelope.gain.linearRampToValueAtTime(kind === 'sweetCue' ? 0.12 : 0.22, now + 0.007)
+        envelope.gain.exponentialRampToValueAtTime(0.001, now + duration)
+        oscillator.connect(envelope).connect(volume)
+        oscillator.onended = () => { oscillator.disconnect(); envelope.disconnect() }
+        oscillator.start(now)
+        oscillator.stop(now + duration)
+        return
+      }
+      const buffer = eventBuffers[kind === 'trampoline' ? 'bounce' : kind]
+      if (!buffer) return
+      const bounce = kind === 'bounce' || kind === 'trampoline'
+      const strength = bounce ? Math.min(1, speed / 22) : 1
+      const rate = kind === 'trampoline' ? 1.34 - strength * 0.16 : bounce ? 1.12 - strength * 0.16 : 1
+      startVoicePlayback(buffer, false, 0.36 + 0.42 * strength, rate)
     },
     playBodyImpact(speed) {
       const now = context.currentTime

@@ -62,5 +62,16 @@
   "bird": "Bird hit!",
   "pit": "Watch out for the pit!",
   "goldenCharge": "Golden aura",
-  "thunderCharge": "Thunder charge"
+  "thunderCharge": "Thunder charge",
+  "releaseNow": "Release now!",
+  "releaseTiming": "Wait for the chime",
+  "sweetThrow": "Sweet release!",
+  "kickNow": "Kick now",
+  "kickWait": "Wait for the chain to tighten",
+  "kickUsed": "Kick assist!",
+  "timingHelp": "Release on the chime for a faster throw and a steadier grip below 150%.",
+  "routeHelp": "Aim low for a few coins before the pit, or go high for a longer coin arc and rockets among the birds.",
+  "kickHelp": "When the hammer pulls you into the air, press Space as the chain tightens to kick upward once.",
+  "trampoline": "Trampoline bounce!",
+  "trampolineHelp": "Land on a trampoline to bounce back into the air."
 }

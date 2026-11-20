@@ -563,3 +563,15 @@ canvas { width: 100%; height: 100%; }
   white-space: normal;
   text-wrap: balance;
 }
+
+.timing-hint {
+  margin-top: 6px;
+  padding: 3px 6px;
+  color: var(--deep-blue);
+  font-size: 12px;
+  font-weight: 800;
+}
+.timing-hint[data-active="true"] {
+  background: #ffdc80;
+  color: #57380d;
+}

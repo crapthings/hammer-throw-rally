@@ -77,6 +77,10 @@ export function createRagdoll(origin, direction, grip, courseLength, ballOrigin 
 
   return {
     nodes,
+    kick(direction) {
+      bodies.footA.applyImpulse({ x: direction * 2, y: 1.6, z: 0 }, true)
+      bodies.footB.applyImpulse({ x: direction * 1.3, y: 2.4, z: 0 }, true)
+    },
     advance(dt, x, y) {
       if (dt <= 0) return
       for (let elapsed = step - remainder; elapsed <= dt + fixedStepTolerance; elapsed += step) {

@@ -1,10 +1,13 @@
+import { createCameraHandoff, followDeadzone, horizontalCameraEdges } from './follow-camera.js'
 import { createParticles } from './particles.js'
 import { createHeldChain } from './held-chain.js'
 import { createRagdoll, initRagdollPhysics } from './ragdoll.js'
-import { COURSE, RUN_STEP_SECONDS, PIT_CLIMB_SECONDS, PIT_ASCENT_START, RESCUE_CATCH_SECONDS } from './course.js'
+import { COURSE, RUN_STEP_SECONDS, PIT_CLIMB_SECONDS, PIT_ASCENT_START, RESCUE_CATCH_SECONDS, TRAMPOLINE_HEIGHT } from './course.js'
 import { createRiverbank } from './riverbank.js'
 import { Application } from 'pixi.js'
 import { Container3D, CubeGeometry, DirectionalLight, Material3D, Mesh3D, SphereGeometry, TorusGeometry, View3D } from '@pixi/3d'
+
+const LANE_RENDER_MARGIN = 40
 
 const palette = {
   blue: 0x619dc6,
@@ -133,8 +136,15 @@ export async function createScene(canvas, onBodyImpact = () => {}) {
   let ragdoll
   let ragdollTime = 0
   let cameraLift = 0
-  let shakeTime = 0
+  let impactCamera
+  let replayFocus
+  let replayWeight = 0
   let cameraCenter
+  const cameraHandoff = createCameraHandoff()
+  let previousVerticalSpeed
+  let verticalLead = 0
+  let runEntryX
+  let runCameraStart
   let recoverPose
   let wasRecovering = false
   let heldChain
@@ -150,7 +160,7 @@ export async function createScene(canvas, onBodyImpact = () => {}) {
       courseMeshes.addChild(object)
       return object
     }
-    let edge = 0
+    let edge = -LANE_RENDER_MARGIN
     for (const gap of [...obstacles.pits, { x: hole, width: cup * 2 }]) {
       const left = gap.x - gap.width / 2
       add(palette.peach, (edge + left) / 2, -0.1, 0, left - edge, 0.2, 6)
@@ -171,13 +181,28 @@ export async function createScene(canvas, onBodyImpact = () => {}) {
       }
       edge = gap.x + gap.width / 2
     }
-    add(palette.peach, (edge + length) / 2, -0.1, 0, length - edge, 0.2, 6)
+    const laneEnd = length + LANE_RENDER_MARGIN
+    add(palette.peach, (edge + laneEnd) / 2, -0.1, 0, laneEnd - edge, 0.2, 6)
     for (let meter = 25; meter < hole - start; meter += 25) {
       const markX = start + meter
-      if (obstacles.pits.some((pit) => Math.abs(markX - pit.x) < pit.width / 2 + 0.4)) continue
+      if ([...obstacles.pits, ...obstacles.trampolines].some((item) => Math.abs(markX - item.x) < item.width / 2 + 0.4)) continue
       add(palette.paper, markX, 0.017, 2, 0.12, 0.026, 1.5)
     }
     return {
+      trampolines: obstacles.trampolines.map(({ x, width }) => {
+        const frame = model(courseMeshes, [
+          [0x304b63, 0, 0.045, 0, width, 0.09, 2.05],
+          [0x6bc9bd, 0, 0.102, 0, width, 0.115, 2.02],
+          [0xffd369, -width / 2 + 0.14, 0.126, 0, 0.24, 0.068, 2.03],
+          [0xffd369, width / 2 - 0.14, 0.126, 0, 0.24, 0.068, 2.03],
+        ])
+        frame.position.x = x
+        const mat = model(frame, [
+          [0x344274, 0, -0.035, 0, width - 0.50, 0.07, 1.62],
+          ...[-0.64, 0, 0.64].map((offset) => [0xc2ece3, offset, 0.004, 0, 0.10, 0.008, 1.04]),
+        ])
+        return { frame, mat }
+      }),
       rockets: obstacles.rockets.map(() => model(courseMeshes, rocketPieces)),
       aircraft: obstacles.aircraft.map(({ kind }) => model(courseMeshes, kind === 'plane' ? [
         [0xf0c982, -0.05, -0.02, 0, 2.38, 0.44, 0.52, sphere],
@@ -206,7 +231,7 @@ export async function createScene(canvas, onBodyImpact = () => {}) {
         [0xffd76f, 0.52, -0.03, 0.46, 0.16, 0.10, 0.12, sphere],
       ])),
       rescues: [],
-      coins: obstacles.coins.map(() => add(0xffc644, 0, 0, 0, 0.64, 0.64, 0.16, sphere)),
+      coins: obstacles.coins.map(({ lane }) => add(lane === 'low' ? 0xffdf96 : 0xffc644, 0, 0, 0, 0.64, 0.64, 0.16, sphere)),
       birds: obstacles.birds.map((_, index) => {
         const bird = new Container3D()
         courseMeshes.addChild(bird)
@@ -236,7 +261,7 @@ export async function createScene(canvas, onBodyImpact = () => {}) {
   }
   let props
 
-  function draw({ x, y, camera, phase, power, origin, trail, preview, obstacles, effects, dt, cameraDt = dt, planeReplay, time, spin, spinRate, fallTime, dragged, orbitAxis, launchTime, runTime, recoveryTime, pitReturn, rocketTime, vx, vy }) {
+  function draw({ x, y, phase, power, origin, trail, preview, obstacles, effects, dt, cameraDt = dt, hitStopped, hitTarget, planeReplay, time, ambientTime, spin, spinRate, fallTime, dragged, orbitAxis, launchTime, runTime, recoveryTime, pitReturn, rocketTime, vx, vy }) {
     const width = Math.max(1, canvas.clientWidth)
     const height = Math.max(1, canvas.clientHeight)
     if (app.screen.width !== width || app.screen.height !== height) app.renderer.resize(width, height)
@@ -262,12 +287,16 @@ export async function createScene(canvas, onBodyImpact = () => {}) {
     const ballHeight = -y
     const stanceX = base - direction * (COURSE.chainLength + 0.20)
     const progress = Math.min(1, runTime / 1.05)
-    const entryX = Math.min((cameraCenter ?? camera) - size - 0.6, stanceX)
+    if (!running) runEntryX = undefined
+    else if (runEntryX === undefined) {
+      runCameraStart = cameraCenter ?? x
+      runEntryX = Math.min(runCameraStart - size - 0.6, stanceX)
+    }
     const ease = (t) => {
       const p = Math.max(0, Math.min(1, t))
       return p * p * (3 - 2 * p)
     }
-    let pivotX = running ? entryX + (stanceX - entryX) * progress : stanceX
+    let pivotX = running ? runEntryX + (stanceX - runEntryX) * progress : stanceX
     let stride = running ? Math.sin(runTime * Math.PI / RUN_STEP_SECONDS) * Math.sin(progress * Math.PI) : 0
     let pivotY = fallen ? 0.26 : Math.abs(stride) * 0.13
     let climbing = false
@@ -299,6 +328,8 @@ export async function createScene(canvas, onBodyImpact = () => {}) {
       ragdollTime = 0
     }
     if (carried) {
+      const kick = effects.find((effect) => effect.kind === 'kick')
+      if (kick) ragdoll.kick(kick.direction)
       ragdoll.advance(launchTime - ragdollTime, x, ballHeight)
       ragdollTime = launchTime
     } else if (ragdoll) {
@@ -480,53 +511,138 @@ export async function createScene(canvas, onBodyImpact = () => {}) {
       : charging ? tip : { x, y: ballHeight, z: 0 }
     const { x: bx, y: by, z: bz } = ballPose
     const torso = parts[2].object.position
-    const normalCenter = camera + size * 0.56
-    const recoveryFollow = recovering ? Math.max(0, 1 - recoveryTime / 1.35) : 0
-    const bodyCenter = torso.x + (bx - torso.x) * 0.30
-    const desiredCenter = pitRecovery ? torso.x - size * 0.12 : carried ? bodyCenter : normalCenter + (bodyCenter - normalCenter) * recoveryFollow
-    const replayWeight = planeReplay ? Math.min(1, planeReplay.remaining / 0.36) : 0
-    const replayCenter = planeReplay ? desiredCenter + (planeReplay.x - desiredCenter) * replayWeight : desiredCenter
-    const targetCenter = Math.min(length - size, Math.max(size, replayCenter))
-    const resetCamera = courseChanged || dt === 0
+    // Use the physical chest for horizontal framing and the projectile for altitude.
+    const chest = carried ? ragdoll.nodes.chest : torso
+    const trackBall = throwing || running || phase === 'holed'
+    const trackingMode = carried ? 'pair' : trackBall ? 'ball' : pitRecovery ? 'pit' : 'player'
+    const anchorX = carried ? chest.x + (x - chest.x) * 0.45 : trackBall ? x : chest.x
+    const anchorY = trackBall ? ballHeight : torso.y
+    const { left: deadzoneLeft, right: deadzoneRight } = horizontalCameraEdges(size)
+    const clampCenter = (value) => Math.min(length + LANE_RENDER_MARGIN - size, Math.max(size - LANE_RENDER_MARGIN, value))
+    const playerFrame = clampCenter(stanceX + deadzoneLeft)
+    // Hit stop freezes the world, while the impact offset runs on the camera clock.
+    const resetCamera = courseChanged || cameraCenter === undefined
     if (resetCamera) {
-      cameraCenter = targetCenter
+      cameraCenter = playerFrame
+      cameraHandoff.reset()
       cameraLift = 0
-      shakeTime = 0
+      previousVerticalSpeed = undefined
+      verticalLead = 0
+      impactCamera = null
+      replayFocus = null
+      replayWeight = 0
     }
-    cameraCenter += (targetCenter - cameraCenter) * (1 - Math.exp(-(planeReplay ? 12 : carried ? 18 : 5) * cameraDt))
-    if (effects.some((effect) => effect.kind === 'bird' || effect.kind === 'explosion')) shakeTime = 0.19
-    const shake = shakeTime / 0.19
-    shakeTime = Math.max(0, shakeTime - dt)
-    const center = cameraCenter + Math.sin(shakeTime * 114) * shake * 0.075
-    const shakeY = Math.cos(shakeTime * 92) * shake * 0.043
+
+    const impact = effects.find((effect) => effect.kind === 'bird' || effect.kind === 'explosion')
+    if (impact) {
+      const direction = Math.sign(vx) || (x <= hole ? 1 : -1)
+      impactCamera = { age: 0, direction, center: cameraCenter, lift: cameraLift, strength: impact.kind === 'explosion' ? 1 : 0.56 }
+    } else if (impactCamera) {
+      impactCamera.age += cameraDt
+      if (impactCamera.age >= 0.30) impactCamera = null
+    }
+
+    const impactAge = impactCamera?.age ?? 0.30
+    const followEase = ease(impactAge / 0.24)
+    const followDt = hitStopped ? 0 : cameraDt
+    const target = cameraHandoff.update(trackingMode, anchorX, anchorY, followDt)
+    if (!hitStopped) {
+      if (throwing) {
+        cameraCenter = clampCenter(followDeadzone(cameraCenter, target.x, deadzoneLeft, deadzoneRight))
+      } else if (running) {
+        const reframe = ease((progress - 0.5) / 0.48)
+        cameraCenter = runCameraStart + (playerFrame - runCameraStart) * reframe
+      } else if (recovering || pitRecovery) {
+        const recoveryDuration = pitRecovery ? PIT_CLIMB_SECONDS : 2.8
+        const finish = ease((recoveryTime - recoveryDuration + 0.5) / 0.48)
+        const recoveryFrame = clampCenter(target.x + deadzoneLeft)
+        const desiredFrame = recoveryFrame + (playerFrame - recoveryFrame) * finish
+        cameraCenter += (desiredFrame - cameraCenter) * Math.max(finish, 1 - Math.exp(-8 * followDt))
+      } else if (phase !== 'holed') {
+        cameraCenter = playerFrame
+      }
+    }
+
+    if (planeReplay) replayFocus = planeReplay
+    const replayTarget = planeReplay && throwing ? ease(planeReplay.remaining / 0.55) : 0
+    replayWeight += (replayTarget - replayWeight) * (1 - Math.exp(-8 * followDt))
+    if (replayTarget === 0 && replayWeight < 0.001) {
+      replayWeight = 0
+      replayFocus = null
+    }
+    const followCenter = cameraCenter + ((impactCamera?.center ?? cameraCenter) - cameraCenter) * (1 - followEase)
+    const replayCenter = replayFocus ? clampCenter(replayFocus.x) : followCenter
+
     const verticalRoom = height * size / width
-    const headHeight = parts[3].object.position.y
-    const followHeight = carried ? Math.max(by, torso.y + 0.55, headHeight + 0.4) : -y
-    const normalLift = Math.max(0, followHeight - 3.4 - verticalRoom * (carried ? 0.30 : 0.62))
-    const replayLift = planeReplay ? Math.max(0, planeReplay.height - 3.9) : normalLift
-    const liftTarget = normalLift + (replayLift - normalLift) * replayWeight
-    cameraLift += (liftTarget - cameraLift) * (1 - Math.exp(-(carried ? 18 : 15) * cameraDt))
+    const verticalSpeed = -vy
+    if (throwing && dt > 0) {
+      const acceleration = previousVerticalSpeed === undefined || impactAge < 0.16
+        ? 0 : Math.max(-40, Math.min(40, (verticalSpeed - previousVerticalSpeed) / dt))
+      const lookTime = Math.min(0.12, Math.abs(verticalSpeed) * 0.006)
+      const lead = verticalSpeed * lookTime + acceleration * lookTime ** 2 / 2
+      const limit = verticalRoom * 0.20
+      verticalLead += (Math.max(-limit, Math.min(limit, lead)) - verticalLead) * (1 - Math.exp(-10 * followDt))
+      previousVerticalSpeed = verticalSpeed
+    } else if (!throwing) {
+      verticalLead = 0
+      previousVerticalSpeed = undefined
+    }
+    if (!hitStopped) {
+      const halfZoneY = verticalRoom * 0.45
+      const centerY = 3.4 + cameraLift
+      // Lead the ascent or descent only once the actual target crosses the box.
+      const offsetY = target.y - centerY
+      const overflow = Math.max(0, Math.abs(offsetY) - halfZoneY)
+      const lead = offsetY * verticalLead > 0
+        ? Math.sign(verticalLead) * Math.min(Math.abs(verticalLead), overflow * 0.35) : 0
+      const liftTarget = Math.max(0, followDeadzone(centerY, target.y + lead, halfZoneY) - 3.4)
+      const grounded = !throwing && !pitRecovery
+      const desiredLift = grounded ? 0 : liftTarget
+      const verticalRate = grounded ? 8 : 7 + Math.min(9, Math.abs(verticalSpeed) * 0.16)
+      cameraLift += (desiredLift - cameraLift) * (1 - Math.exp(-verticalRate * followDt))
+      if (cameraLift < 0.001) cameraLift = 0
+    }
+    const followLift = cameraLift + ((impactCamera?.lift ?? cameraLift) - cameraLift) * (1 - followEase)
+    const replayLift = replayFocus ? Math.max(0, replayFocus.height - 3.9) : followLift
+    const lift = followLift + (replayLift - followLift) * replayWeight
+
+    const impactEnvelope = (1 - impactAge / 0.30) ** 2
+    const impactStrength = (impactCamera?.strength ?? 0) * impactEnvelope
+    const kick = Math.sin(Math.PI * Math.min(1, impactAge / 0.16))
+    const vibration = Math.sin(impactAge * 79)
+    const center = followCenter + (replayCenter - followCenter) * replayWeight
+      + (impactCamera?.direction ?? 0) * impactStrength * (0.24 * kick + 0.038 * vibration)
+    const shakeY = impactStrength * (0.03 * kick + 0.032 * vibration)
     const pixelsPerMeter = width / (2 * size)
-    const openingCenter = Math.max(size, start + size * 0.56)
+    const openingCenter = clampCenter(start - COURSE.chainLength - 0.20 + deadzoneLeft)
     const groundLine = height / 2 + 3.4 * pixelsPerMeter * 0.993
-    drawRiverbank(center, openingCenter, pixelsPerMeter / 16, groundLine, (cameraLift + shakeY) * pixelsPerMeter * 0.993, time)
-    view.camera.position.set(center, 9.3 + cameraLift + shakeY, 48)
-    view.camera.lookAt({ x: center, y: 3.4 + cameraLift + shakeY, z: 0 })
+    drawRiverbank(center, openingCenter, pixelsPerMeter / 16, groundLine, (lift + shakeY) * pixelsPerMeter * 0.993, ambientTime)
+    view.camera.position.set(center, 9.3 + lift + shakeY, 48)
+    view.camera.lookAt({ x: center, y: 3.4 + lift + shakeY, z: 0 })
+    obstacles.trampolines.forEach((pad, index) => {
+      const { frame, mat } = props.trampolines[index]
+      frame.visible = Math.abs(pad.x - center) < size + pad.width
+      const age = ambientTime - pad.lastBounce
+      const flex = age < 0.36 ? Math.sin(age * 27) * Math.exp(-10 * age) * 0.10 : 0
+      mat.position.y = TRAMPOLINE_HEIGHT + 0.004 - flex
+    })
     obstacles.rockets.forEach((pickup, index) => {
       const object = props.rockets[index]
       object.visible = !pickup.taken && Math.abs(pickup.x - center) < size + 2
       object.position.set(pickup.x, -pickup.y, 0)
-      object.rotation.y = Math.sin(time * 2.4) * 0.48
-      object.rotation.z = 0.35 + Math.sin(time * 3) * 0.18
+      object.rotation.y = Math.sin(ambientTime * 2.4) * 0.48
+      object.rotation.z = 0.35 + Math.sin(ambientTime * 3) * 0.18
     })
     obstacles.aircraft.forEach((craft, index) => {
       const object = props.aircraft[index]
-      object.visible = !craft.dead && Math.abs(craft.x - center) < size + 3
+      const impactPose = hitTarget?.object === craft
+      const animationTime = impactPose ? hitTarget.time : ambientTime
+      object.visible = (!craft.dead || impactPose) && Math.abs(craft.x - center) < size + 3
       object.position.set(craft.x, -craft.y, 0)
-      object.rotation.z = Math.sin(time * 3 + index) * 0.11
+      object.rotation.z = Math.sin(animationTime * 3 + index) * 0.11
       if (craft.kind === 'plane') {
         object.rotation.y = -0.32
-        object.children.at(-1).rotation.x = time * 28
+        object.children.at(-1).rotation.x = animationTime * 28
       }
     })
     obstacles.rescues.forEach((rescue, index) => {
@@ -603,18 +719,20 @@ export async function createScene(canvas, onBodyImpact = () => {}) {
       const object = props.coins[i]
       object.visible = !coin.taken && Math.abs(coin.x - center) < size + 2
       object.position.set(coin.x, -coin.y, 0)
-      object.rotation.y = time * 4 + i * 0.4
+      object.rotation.y = ambientTime * 4 + i * 0.4
     })
     obstacles.birds.forEach((obstacle, i) => {
       const { bird, wings } = props.birds[i]
-      bird.visible = !obstacle.dead && Math.abs(obstacle.x - center) < size + 2
-        && Math.abs(-obstacle.y - 3.4 - cameraLift) < height / pixelsPerMeter / 2 + 2
+      const impactPose = hitTarget?.object === obstacle
+      const animationTime = impactPose ? hitTarget.time : ambientTime
+      bird.visible = (!obstacle.dead || impactPose) && Math.abs(obstacle.x - center) < size + 2
+        && Math.abs(-obstacle.y - 3.4 - lift) < height / pixelsPerMeter / 2 + 2
       if (!bird.visible) return
       bird.position.set(obstacle.x, -obstacle.y, 0)
       bird.scale.x = obstacle.vx < 0 ? -1 : 1
       const startled = obstacle.cooldown > 0.48
       bird.rotation.z = Math.max(-0.25, Math.min(0.25, -obstacle.vy * 0.20))
-      const flap = Math.sin(time * (startled ? 24 : 12) + i * 1.7)
+      const flap = Math.sin(animationTime * (startled ? 24 : 12) + i * 1.7)
       wings.forEach((wing, side) => {
         const sign = side === 0 ? -1 : 1
         wing.rotation.x = sign * (flap * 0.9 - 0.28)
@@ -678,7 +796,7 @@ export async function createScene(canvas, onBodyImpact = () => {}) {
       star.position.set(pivotX - 1.2 + Math.cos(orbitAngle) * 0.45, 0.95 + Math.sin(orbitAngle) * 0.2, 0.55)
       star.rotation.z = orbitAngle
     })
-    flag.rotation.y = Math.sin(time * 6) * 0.32
+    flag.rotation.y = Math.sin(ambientTime * 6) * 0.32
 
     landingMarker.visible = Boolean(preview)
     if (preview) landingMarker.position.x = preview.landing
@@ -694,8 +812,9 @@ export async function createScene(canvas, onBodyImpact = () => {}) {
       else if (effect.kind === 'help') particles.showHelp(effect)
       else particles.burst(effect.kind, effect.x, effect.y, effect.speed)
     })
-    particles.draw(dt, center, 3.4 + cameraLift + shakeY, pixelsPerMeter, width, height)
+    particles.draw(cameraDt, center, 3.4 + lift + shakeY, pixelsPerMeter, width, height)
     app.render()
+    return carried && Math.hypot(x - ragdoll.nodes.grip.x, ballHeight - ragdoll.nodes.grip.y) >= COURSE.chainLength * 0.90
   }
 
   return {
