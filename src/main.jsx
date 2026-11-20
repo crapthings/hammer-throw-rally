@@ -242,6 +242,9 @@ function App() {
                 </ul>
               )}
               </div>
+              <p className="engine-credit" lang="en">
+                Powered by <a href="https://github.com/pixijs/3d" target="_blank" rel="noopener noreferrer">Pixi3D.js</a>
+              </p>
             </div>
           )}
         </div>
